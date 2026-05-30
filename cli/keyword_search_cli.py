@@ -76,6 +76,9 @@ class InvertedIndex:
         total_documents = len(self.docmap)
         return math.log(total_documents / document_frequency)
 
+    def get_tfidf(self, doc_id: int, term: str) -> float:
+        return self.get_tf(doc_id, term) * self.get_idf(term)
+
     def build(self, movies: list[dict]) -> None:
         for movie in movies:
             doc_id = movie["id"]
@@ -141,6 +144,10 @@ def main() -> None:
     idf_parser = subparsers.add_parser("idf", help="Get inverse document frequency for a term")
     idf_parser.add_argument("term", type=str, help="Single search term")
 
+    tfidf_parser = subparsers.add_parser("tfidf", help="Get TF-IDF for a document and term")
+    tfidf_parser.add_argument("doc_id", type=int, help="Document ID")
+    tfidf_parser.add_argument("term", type=str, help="Single search term")
+
     subparsers.add_parser("build", help="Build and cache the inverted index")
 
     args = parser.parse_args()
@@ -204,6 +211,19 @@ def main() -> None:
             try:
                 idf = inverted_index.get_idf(args.term)
                 print(f"Inverse document frequency of '{args.term}': {idf:.2f}")
+            except ValueError as error:
+                print(f"Error: {error}")
+
+        case "tfidf":
+            stopwords = load_stopwords()
+            inverted_index = load_index(stopwords)
+
+            if inverted_index is None:
+                return
+
+            try:
+                tf_idf = inverted_index.get_tfidf(args.doc_id, args.term)
+                print(f"TF-IDF score of '{args.term}' in document '{args.doc_id}': {tf_idf:.2f}")
             except ValueError as error:
                 print(f"Error: {error}")
 
