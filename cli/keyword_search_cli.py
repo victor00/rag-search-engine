@@ -5,6 +5,7 @@ import json
 import os
 import pickle
 import string
+from collections import Counter
 
 from nltk.stem import PorterStemmer
 
@@ -32,28 +33,40 @@ def tokenize(text: str, stopwords: set[str]) -> list[str]:
     ]
 
 
+def single_tokenize(term: str, stopwords: set[str]) -> str:
+    tokens = tokenize(term, stopwords)
+
+    if len(tokens) != 1:
+        raise ValueError(f"Expected a single token, got: {tokens}")
+
+    return tokens[0]
+
+
 class InvertedIndex:
     def __init__(self, stopwords: set[str]) -> None:
         self.index: dict[str, set[int]] = {}
         self.docmap: dict[int, dict] = {}
+        self.term_frequencies: dict[int, Counter[str]] = {}
         self.stopwords = stopwords
 
     def __add_document(self, doc_id: int, text: str) -> None:
         tokens = tokenize(text, self.stopwords)
+        self.term_frequencies[doc_id] = Counter()
 
         for token in tokens:
             if token not in self.index:
                 self.index[token] = set()
 
             self.index[token].add(doc_id)
+            self.term_frequencies[doc_id][token] += 1
 
     def get_documents(self, term: str) -> list[int]:
-        tokens = tokenize(term.lower(), self.stopwords)
+        token = single_tokenize(term, self.stopwords)
+        return sorted(self.index.get(token, set()))
 
-        if not tokens:
-            return []
-
-        return sorted(self.index.get(tokens[0], set()))
+    def get_tf(self, doc_id: int, term: str) -> int:
+        token = single_tokenize(term, self.stopwords)
+        return self.term_frequencies.get(doc_id, Counter()).get(token, 0)
 
     def build(self, movies: list[dict]) -> None:
         for movie in movies:
@@ -73,12 +86,18 @@ class InvertedIndex:
         with open("cache/docmap.pkl", "wb") as file:
             pickle.dump(self.docmap, file)
 
+        with open("cache/term_frequencies.pkl", "wb") as file:
+            pickle.dump(self.term_frequencies, file)
+
     def load(self) -> None:
         with open("cache/index.pkl", "rb") as file:
             self.index = pickle.load(file)
 
         with open("cache/docmap.pkl", "rb") as file:
             self.docmap = pickle.load(file)
+
+        with open("cache/term_frequencies.pkl", "rb") as file:
+            self.term_frequencies = pickle.load(file)
 
 
 def load_movies() -> list[dict]:
@@ -94,6 +113,10 @@ def main() -> None:
 
     search_parser = subparsers.add_parser("search", help="Search movies using keywords")
     search_parser.add_argument("query", type=str, help="Search query")
+
+    tf_parser = subparsers.add_parser("tf", help="Get term frequency for a document")
+    tf_parser.add_argument("doc_id", type=int, help="Document ID")
+    tf_parser.add_argument("term", type=str, help="Single search term")
 
     subparsers.add_parser("build", help="Build and cache the inverted index")
 
@@ -138,6 +161,21 @@ def main() -> None:
             for index, doc_id in enumerate(results, start=1):
                 movie = inverted_index.docmap[doc_id]
                 print(f"{index}. {movie['title']} ({doc_id})")
+
+        case "tf":
+            stopwords = load_stopwords()
+            inverted_index = InvertedIndex(stopwords)
+
+            try:
+                inverted_index.load()
+            except FileNotFoundError:
+                print("Error: index cache not found. Run the build command first.")
+                return
+
+            try:
+                print(inverted_index.get_tf(args.doc_id, args.term))
+            except ValueError as error:
+                print(f"Error: {error}")
 
         case _:
             parser.print_help()
