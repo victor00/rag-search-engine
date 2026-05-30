@@ -2,6 +2,8 @@
 
 import argparse
 import json
+import os
+import pickle
 import string
 
 from nltk.stem import PorterStemmer
@@ -41,6 +43,51 @@ def matches(query: str, title: str, stopwords: set[str]) -> bool:
     )
 
 
+class InvertedIndex:
+    def __init__(self, stopwords: set[str]) -> None:
+        self.index: dict[str, set[int]] = {}
+        self.docmap: dict[int, dict] = {}
+        self.stopwords = stopwords
+
+    def __add_document(self, doc_id: int, text: str) -> None:
+        tokens = tokenize(text, self.stopwords)
+
+        for token in tokens:
+            if token not in self.index:
+                self.index[token] = set()
+
+            self.index[token].add(doc_id)
+
+    def get_documents(self, term: str) -> list[int]:
+        token = tokenize(term.lower(), self.stopwords)[0]
+        return sorted(self.index.get(token, set()))
+
+    def build(self, movies: list[dict]) -> None:
+        for movie in movies:
+            doc_id = movie["id"]
+            self.docmap[doc_id] = movie
+            self.__add_document(
+                doc_id,
+                f"{movie['title']} {movie['description']}",
+            )
+
+    def save(self) -> None:
+        os.makedirs("cache", exist_ok=True)
+
+        with open("cache/index.pkl", "wb") as file:
+            pickle.dump(self.index, file)
+
+        with open("cache/docmap.pkl", "wb") as file:
+            pickle.dump(self.docmap, file)
+
+
+def load_movies() -> list[dict]:
+    with open("data/movies.json", "r", encoding="utf-8") as file:
+        data = json.load(file)
+
+    return data["movies"]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Keyword Search CLI")
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
@@ -48,17 +95,17 @@ def main() -> None:
     search_parser = subparsers.add_parser("search", help="Search movies using keywords")
     search_parser.add_argument("query", type=str, help="Search query")
 
+    subparsers.add_parser("build", help="Build and cache the inverted index")
+
     args = parser.parse_args()
 
     match args.command:
         case "search":
-            with open("data/movies.json", "r", encoding="utf-8") as file:
-                data = json.load(file)
-
+            movies = load_movies()
             stopwords = load_stopwords()
             results = []
 
-            for movie in data["movies"]:
+            for movie in movies:
                 if matches(args.query, movie["title"], stopwords):
                     results.append(movie)
 
@@ -66,6 +113,18 @@ def main() -> None:
 
             for index, movie in enumerate(results[:5], start=1):
                 print(f"{index}. {movie['title']}")
+
+        case "build":
+            movies = load_movies()
+            stopwords = load_stopwords()
+
+            inverted_index = InvertedIndex(stopwords)
+            inverted_index.build(movies)
+            inverted_index.save()
+
+            merida_doc_id = inverted_index.get_documents("merida")[0]
+
+            print(f"First document ID for 'merida': {merida_doc_id}")
 
         case _:
             parser.print_help()
