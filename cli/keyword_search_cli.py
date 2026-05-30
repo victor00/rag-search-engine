@@ -4,10 +4,41 @@ import argparse
 import json
 import string
 
+from nltk.stem import PorterStemmer
+
+
+stemmer = PorterStemmer()
+
 
 def normalize(text: str) -> str:
     translator = str.maketrans("", "", string.punctuation)
     return text.lower().translate(translator)
+
+
+def load_stopwords() -> set[str]:
+    with open("data/stopwords.txt", "r", encoding="utf-8") as file:
+        words = file.read().splitlines()
+
+    return {normalize(word) for word in words if word}
+
+
+def tokenize(text: str, stopwords: set[str]) -> list[str]:
+    return [
+        stemmer.stem(token)
+        for token in normalize(text).split()
+        if token and token not in stopwords
+    ]
+
+
+def matches(query: str, title: str, stopwords: set[str]) -> bool:
+    query_tokens = tokenize(query, stopwords)
+    title_tokens = tokenize(title, stopwords)
+
+    return any(
+        query_token in title_token
+        for query_token in query_tokens
+        for title_token in title_tokens
+    )
 
 
 def main() -> None:
@@ -24,13 +55,11 @@ def main() -> None:
             with open("data/movies.json", "r", encoding="utf-8") as file:
                 data = json.load(file)
 
-            query = normalize(args.query)
+            stopwords = load_stopwords()
             results = []
 
             for movie in data["movies"]:
-                title = normalize(movie["title"])
-
-                if query in title:
+                if matches(args.query, movie["title"], stopwords):
                     results.append(movie)
 
             print(f"Searching for: {args.query}")
