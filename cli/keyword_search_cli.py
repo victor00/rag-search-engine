@@ -11,7 +11,10 @@ from collections import Counter
 from nltk.stem import PorterStemmer
 
 
+CACHE_DIR = "cache"
+
 BM25_K1 = 1.5
+BM25_B = 0.75
 
 stemmer = PorterStemmer()
 
@@ -50,15 +53,29 @@ class InvertedIndex:
         self.index: dict[str, set[int]] = {}
         self.docmap: dict[int, dict] = {}
         self.term_frequencies: dict[int, Counter[str]] = {}
+        self.doc_lengths: dict[int, int] = {}
         self.stopwords = stopwords
+
+        self.index_path = os.path.join(CACHE_DIR, "index.pkl")
+        self.docmap_path = os.path.join(CACHE_DIR, "docmap.pkl")
+        self.term_frequencies_path = os.path.join(CACHE_DIR, "term_frequencies.pkl")
+        self.doc_lengths_path = os.path.join(CACHE_DIR, "doc_lengths.pkl")
 
     def __add_document(self, doc_id: int, text: str) -> None:
         tokens = tokenize(text, self.stopwords)
+
         self.term_frequencies[doc_id] = Counter()
+        self.doc_lengths[doc_id] = len(tokens)
 
         for token in tokens:
             self.index.setdefault(token, set()).add(doc_id)
             self.term_frequencies[doc_id][token] += 1
+
+    def __get_avg_doc_length(self) -> float:
+        if not self.doc_lengths:
+            return 0.0
+
+        return sum(self.doc_lengths.values()) / len(self.doc_lengths)
 
     def get_documents(self, term: str) -> list[int]:
         token = single_tokenize(term, self.stopwords)
@@ -73,10 +90,23 @@ class InvertedIndex:
         doc_id: int,
         term: str,
         k1: float = BM25_K1,
+        b: float = BM25_B,
     ) -> float:
         tf = self.get_tf(doc_id, term)
 
-        return (tf * (k1 + 1)) / (tf + k1)
+        if tf == 0:
+            return 0.0
+
+        avg_doc_length = self.__get_avg_doc_length()
+
+        if avg_doc_length == 0:
+            return 0.0
+
+        doc_length = self.doc_lengths.get(doc_id, 0)
+
+        length_normalization = 1 - b + b * (doc_length / avg_doc_length)
+
+        return (tf * (k1 + 1)) / (tf + k1 * length_normalization)
 
     def get_idf(self, term: str) -> float:
         token = single_tokenize(term, self.stopwords)
@@ -111,26 +141,32 @@ class InvertedIndex:
             )
 
     def save(self) -> None:
-        os.makedirs("cache", exist_ok=True)
+        os.makedirs(CACHE_DIR, exist_ok=True)
 
-        with open("cache/index.pkl", "wb") as file:
+        with open(self.index_path, "wb") as file:
             pickle.dump(self.index, file)
 
-        with open("cache/docmap.pkl", "wb") as file:
+        with open(self.docmap_path, "wb") as file:
             pickle.dump(self.docmap, file)
 
-        with open("cache/term_frequencies.pkl", "wb") as file:
+        with open(self.term_frequencies_path, "wb") as file:
             pickle.dump(self.term_frequencies, file)
 
+        with open(self.doc_lengths_path, "wb") as file:
+            pickle.dump(self.doc_lengths, file)
+
     def load(self) -> None:
-        with open("cache/index.pkl", "rb") as file:
+        with open(self.index_path, "rb") as file:
             self.index = pickle.load(file)
 
-        with open("cache/docmap.pkl", "rb") as file:
+        with open(self.docmap_path, "rb") as file:
             self.docmap = pickle.load(file)
 
-        with open("cache/term_frequencies.pkl", "rb") as file:
+        with open(self.term_frequencies_path, "rb") as file:
             self.term_frequencies = pickle.load(file)
+
+        with open(self.doc_lengths_path, "rb") as file:
+            self.doc_lengths = pickle.load(file)
 
 
 def load_movies() -> list[dict]:
@@ -168,6 +204,7 @@ def bm25_tf_command(
     doc_id: int,
     term: str,
     k1: float = BM25_K1,
+    b: float = BM25_B,
 ) -> float:
     stopwords = load_stopwords()
     inverted_index = load_index(stopwords)
@@ -175,7 +212,7 @@ def bm25_tf_command(
     if inverted_index is None:
         raise FileNotFoundError("Index cache not found. Run the build command first.")
 
-    return inverted_index.get_bm25_tf(doc_id, term, k1)
+    return inverted_index.get_bm25_tf(doc_id, term, k1, b)
 
 
 def main() -> None:
@@ -218,6 +255,13 @@ def main() -> None:
         nargs="?",
         default=BM25_K1,
         help="Tunable BM25 K1 parameter",
+    )
+    bm25_tf_parser.add_argument(
+        "b",
+        type=float,
+        nargs="?",
+        default=BM25_B,
+        help="Tunable BM25 b parameter",
     )
 
     subparsers.add_parser("build", help="Build and cache the inverted index")
@@ -312,6 +356,7 @@ def main() -> None:
                     args.doc_id,
                     args.term,
                     args.k1,
+                    args.b,
                 )
                 print(f"BM25 TF score of '{args.term}' in document '{args.doc_id}': {bm25tf:.2f}")
             except (ValueError, FileNotFoundError) as error:
