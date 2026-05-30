@@ -103,7 +103,6 @@ class InvertedIndex:
             return 0.0
 
         doc_length = self.doc_lengths.get(doc_id, 0)
-
         length_normalization = 1 - b + b * (doc_length / avg_doc_length)
 
         return (tf * (k1 + 1)) / (tf + k1 * length_normalization)
@@ -130,6 +129,28 @@ class InvertedIndex:
             ((total_documents - document_frequency + 0.5) / (document_frequency + 0.5))
             + 1
         )
+
+    def bm25(self, doc_id: int, term: str) -> float:
+        return self.get_bm25_tf(doc_id, term) * self.get_bm25_idf(term)
+
+    def bm25_search(self, query: str, limit: int) -> list[tuple[int, float]]:
+        query_tokens = tokenize(query, self.stopwords)
+        scores: dict[int, float] = {}
+
+        for doc_id in self.docmap:
+            total_score = 0.0
+
+            for token in query_tokens:
+                total_score += self.bm25(doc_id, token)
+
+            if total_score > 0:
+                scores[doc_id] = total_score
+
+        return sorted(
+            scores.items(),
+            key=lambda item: item[1],
+            reverse=True,
+        )[:limit]
 
     def build(self, movies: list[dict]) -> None:
         for movie in movies:
@@ -222,6 +243,18 @@ def main() -> None:
     search_parser = subparsers.add_parser("search", help="Search movies using keywords")
     search_parser.add_argument("query", type=str, help="Search query")
 
+    bm25search_parser = subparsers.add_parser(
+        "bm25search",
+        help="Search movies using full BM25 scoring",
+    )
+    bm25search_parser.add_argument("query", type=str, help="Search query")
+    bm25search_parser.add_argument(
+        "--limit",
+        type=int,
+        default=5,
+        help="Maximum number of results",
+    )
+
     tf_parser = subparsers.add_parser("tf", help="Get term frequency for a document")
     tf_parser.add_argument("doc_id", type=int, help="Document ID")
     tf_parser.add_argument("term", type=str, help="Single search term")
@@ -304,6 +337,19 @@ def main() -> None:
             for index, doc_id in enumerate(results, start=1):
                 movie = inverted_index.docmap[doc_id]
                 print(f"{index}. {movie['title']} ({doc_id})")
+
+        case "bm25search":
+            stopwords = load_stopwords()
+            inverted_index = load_index(stopwords)
+
+            if inverted_index is None:
+                return
+
+            results = inverted_index.bm25_search(args.query, args.limit)
+
+            for index, (doc_id, score) in enumerate(results, start=1):
+                movie = inverted_index.docmap[doc_id]
+                print(f"{index}. ({doc_id}) {movie['title']} - Score: {score:.2f}")
 
         case "tf":
             stopwords = load_stopwords()
