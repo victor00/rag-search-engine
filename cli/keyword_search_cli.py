@@ -79,6 +79,16 @@ class InvertedIndex:
     def get_tfidf(self, doc_id: int, term: str) -> float:
         return self.get_tf(doc_id, term) * self.get_idf(term)
 
+    def get_bm25_idf(self, term: str) -> float:
+        token = single_tokenize(term, self.stopwords)
+        document_frequency = len(self.index.get(token, set()))
+        total_documents = len(self.docmap)
+
+        return math.log(
+            ((total_documents - document_frequency + 0.5) / (document_frequency + 0.5))
+            + 1
+        )
+
     def build(self, movies: list[dict]) -> None:
         for movie in movies:
             doc_id = movie["id"]
@@ -130,6 +140,17 @@ def load_index(stopwords: set[str]) -> InvertedIndex | None:
     return inverted_index
 
 
+def bm25_idf_command(term: str) -> float:
+    stopwords = load_stopwords()
+    inverted_index = load_index(stopwords)
+
+    if inverted_index is None:
+        raise FileNotFoundError("Index cache not found. Run the build command first.")
+
+    token = single_tokenize(term, stopwords)
+    return inverted_index.get_bm25_idf(token)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Keyword Search CLI")
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
@@ -147,6 +168,16 @@ def main() -> None:
     tfidf_parser = subparsers.add_parser("tfidf", help="Get TF-IDF for a document and term")
     tfidf_parser.add_argument("doc_id", type=int, help="Document ID")
     tfidf_parser.add_argument("term", type=str, help="Single search term")
+
+    bm25_idf_parser = subparsers.add_parser(
+        "bm25idf",
+        help="Get BM25 IDF score for a given term",
+    )
+    bm25_idf_parser.add_argument(
+        "term",
+        type=str,
+        help="Term to get BM25 IDF score for",
+    )
 
     subparsers.add_parser("build", help="Build and cache the inverted index")
 
@@ -225,6 +256,13 @@ def main() -> None:
                 tf_idf = inverted_index.get_tfidf(args.doc_id, args.term)
                 print(f"TF-IDF score of '{args.term}' in document '{args.doc_id}': {tf_idf:.2f}")
             except ValueError as error:
+                print(f"Error: {error}")
+
+        case "bm25idf":
+            try:
+                bm25idf = bm25_idf_command(args.term)
+                print(f"BM25 IDF score of '{args.term}': {bm25idf:.2f}")
+            except (ValueError, FileNotFoundError) as error:
                 print(f"Error: {error}")
 
         case _:
