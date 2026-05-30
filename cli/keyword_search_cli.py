@@ -32,17 +32,6 @@ def tokenize(text: str, stopwords: set[str]) -> list[str]:
     ]
 
 
-def matches(query: str, title: str, stopwords: set[str]) -> bool:
-    query_tokens = tokenize(query, stopwords)
-    title_tokens = tokenize(title, stopwords)
-
-    return any(
-        query_token in title_token
-        for query_token in query_tokens
-        for title_token in title_tokens
-    )
-
-
 class InvertedIndex:
     def __init__(self, stopwords: set[str]) -> None:
         self.index: dict[str, set[int]] = {}
@@ -59,8 +48,12 @@ class InvertedIndex:
             self.index[token].add(doc_id)
 
     def get_documents(self, term: str) -> list[int]:
-        token = tokenize(term.lower(), self.stopwords)[0]
-        return sorted(self.index.get(token, set()))
+        tokens = tokenize(term.lower(), self.stopwords)
+
+        if not tokens:
+            return []
+
+        return sorted(self.index.get(tokens[0], set()))
 
     def build(self, movies: list[dict]) -> None:
         for movie in movies:
@@ -79,6 +72,13 @@ class InvertedIndex:
 
         with open("cache/docmap.pkl", "wb") as file:
             pickle.dump(self.docmap, file)
+
+    def load(self) -> None:
+        with open("cache/index.pkl", "rb") as file:
+            self.index = pickle.load(file)
+
+        with open("cache/docmap.pkl", "rb") as file:
+            self.docmap = pickle.load(file)
 
 
 def load_movies() -> list[dict]:
@@ -100,20 +100,6 @@ def main() -> None:
     args = parser.parse_args()
 
     match args.command:
-        case "search":
-            movies = load_movies()
-            stopwords = load_stopwords()
-            results = []
-
-            for movie in movies:
-                if matches(args.query, movie["title"], stopwords):
-                    results.append(movie)
-
-            print(f"Searching for: {args.query}")
-
-            for index, movie in enumerate(results[:5], start=1):
-                print(f"{index}. {movie['title']}")
-
         case "build":
             movies = load_movies()
             stopwords = load_stopwords()
@@ -122,9 +108,36 @@ def main() -> None:
             inverted_index.build(movies)
             inverted_index.save()
 
-            merida_doc_id = inverted_index.get_documents("merida")[0]
+            print("Index built and saved.")
 
-            print(f"First document ID for 'merida': {merida_doc_id}")
+        case "search":
+            stopwords = load_stopwords()
+            inverted_index = InvertedIndex(stopwords)
+
+            try:
+                inverted_index.load()
+            except FileNotFoundError:
+                print("Error: index cache not found. Run the build command first.")
+                return
+
+            print(f"Searching for: {args.query}")
+
+            results: list[int] = []
+
+            for token in tokenize(args.query, stopwords):
+                for doc_id in inverted_index.get_documents(token):
+                    if doc_id not in results:
+                        results.append(doc_id)
+
+                    if len(results) >= 5:
+                        break
+
+                if len(results) >= 5:
+                    break
+
+            for index, doc_id in enumerate(results, start=1):
+                movie = inverted_index.docmap[doc_id]
+                print(f"{index}. {movie['title']} ({doc_id})")
 
         case _:
             parser.print_help()
