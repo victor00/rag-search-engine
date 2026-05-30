@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import math
 import os
 import pickle
 import string
@@ -54,10 +55,7 @@ class InvertedIndex:
         self.term_frequencies[doc_id] = Counter()
 
         for token in tokens:
-            if token not in self.index:
-                self.index[token] = set()
-
-            self.index[token].add(doc_id)
+            self.index.setdefault(token, set()).add(doc_id)
             self.term_frequencies[doc_id][token] += 1
 
     def get_documents(self, term: str) -> list[int]:
@@ -67,6 +65,16 @@ class InvertedIndex:
     def get_tf(self, doc_id: int, term: str) -> int:
         token = single_tokenize(term, self.stopwords)
         return self.term_frequencies.get(doc_id, Counter()).get(token, 0)
+
+    def get_idf(self, term: str) -> float:
+        token = single_tokenize(term, self.stopwords)
+        document_frequency = len(self.index.get(token, set()))
+
+        if document_frequency == 0:
+            return 0.0
+
+        total_documents = len(self.docmap)
+        return math.log(total_documents / document_frequency)
 
     def build(self, movies: list[dict]) -> None:
         for movie in movies:
@@ -107,6 +115,18 @@ def load_movies() -> list[dict]:
     return data["movies"]
 
 
+def load_index(stopwords: set[str]) -> InvertedIndex | None:
+    inverted_index = InvertedIndex(stopwords)
+
+    try:
+        inverted_index.load()
+    except FileNotFoundError:
+        print("Error: index cache not found. Run the build command first.")
+        return None
+
+    return inverted_index
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Keyword Search CLI")
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
@@ -117,6 +137,9 @@ def main() -> None:
     tf_parser = subparsers.add_parser("tf", help="Get term frequency for a document")
     tf_parser.add_argument("doc_id", type=int, help="Document ID")
     tf_parser.add_argument("term", type=str, help="Single search term")
+
+    idf_parser = subparsers.add_parser("idf", help="Get inverse document frequency for a term")
+    idf_parser.add_argument("term", type=str, help="Single search term")
 
     subparsers.add_parser("build", help="Build and cache the inverted index")
 
@@ -135,12 +158,9 @@ def main() -> None:
 
         case "search":
             stopwords = load_stopwords()
-            inverted_index = InvertedIndex(stopwords)
+            inverted_index = load_index(stopwords)
 
-            try:
-                inverted_index.load()
-            except FileNotFoundError:
-                print("Error: index cache not found. Run the build command first.")
+            if inverted_index is None:
                 return
 
             print(f"Searching for: {args.query}")
@@ -164,16 +184,26 @@ def main() -> None:
 
         case "tf":
             stopwords = load_stopwords()
-            inverted_index = InvertedIndex(stopwords)
+            inverted_index = load_index(stopwords)
 
-            try:
-                inverted_index.load()
-            except FileNotFoundError:
-                print("Error: index cache not found. Run the build command first.")
+            if inverted_index is None:
                 return
 
             try:
                 print(inverted_index.get_tf(args.doc_id, args.term))
+            except ValueError as error:
+                print(f"Error: {error}")
+
+        case "idf":
+            stopwords = load_stopwords()
+            inverted_index = load_index(stopwords)
+
+            if inverted_index is None:
+                return
+
+            try:
+                idf = inverted_index.get_idf(args.term)
+                print(f"Inverse document frequency of '{args.term}': {idf:.2f}")
             except ValueError as error:
                 print(f"Error: {error}")
 
